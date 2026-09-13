@@ -666,7 +666,7 @@
       },
       "verification_command": [
         "{python}",
-        "tests/test_retrieve.py"
+        "scripts/youmu_retrieve_verify.py"
       ]
     }
   ]
