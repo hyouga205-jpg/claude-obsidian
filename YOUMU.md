@@ -12,6 +12,7 @@
 | `scripts/retrieve.py` `bm25-index.py` `contextual-prefix.py` `rerank.py`・`claude_obsidian/youmu_bridge.py`・`tests/test_youmu_bridge.py` | 4本とも、Youmu の vault にある同名スクリプトへ引き渡すだけの入口 | 検索は Youmu の実装を使う(利用者の裁定)。upstream の検索スクリプトは Youmu の索引を読めない |
 | `scripts/youmu_retrieve_verify.py`・`config/capabilities.json`(wiki-retrieve の `verification_command` だけ) | wiki-retrieve の検証を、Youmu の BM25 検索が1件以上返ることに置き換える | wiki-query はこの検証が通らないと検索を使わない |
 | `tests/conftest.py` | 置き換えた実装を試す upstream のテストを、file 名か test id の完全一致で skip | 通るはずのない失敗が本物の回帰を隠すため |
+| `tests/test_youmu_install_roundtrip.py` | 一時 dir の中で clone → `init`・`adopt`・`setup-multi-agent.sh --host opencode` → `doctor`・`lint` → per-skill link の削除を行い、既存の vault と HOME が1 byte も変わらないことを比べる | Youmu の要件 F25・F27・F28(配布の検査)。WSL が使えない環境では skip せず失敗する |
 | `YOUMU.md` | この文書 | — |
 
 vault 側の入口は `10-SYSTEM/scripts/co.sh`(製品ツリーを `<vault の親>/claude-obsidian-product` に置く前提)。
