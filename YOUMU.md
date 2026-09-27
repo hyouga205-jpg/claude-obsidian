@@ -9,9 +9,8 @@
 | file | 何をするか | なぜ |
 |---|---|---|
 | `scripts/claude-obsidian.py`(4行)・`claude_obsidian/wsl_route.py`・`tests/test_wsl_route.py` | vault に書くサブコマンドを、ネイティブ Windows では WSL の `python3` で実行する | upstream はネイティブ Windows での vault 書き込みを `UNSUPPORTED_PLATFORM` で拒否する |
-| `scripts/retrieve.py` `bm25-index.py` `contextual-prefix.py` `rerank.py`・`claude_obsidian/youmu_bridge.py`・`tests/test_youmu_bridge.py` | 4本とも、Youmu の vault にある同名スクリプトへ引き渡すだけの入口 | 検索は Youmu の実装を使う(利用者の裁定)。upstream の検索スクリプトは Youmu の索引を読めない |
-| `scripts/youmu_retrieve_verify.py`・`config/capabilities.json`(wiki-retrieve の `verification_command` だけ) | wiki-retrieve の検証を、Youmu の BM25 検索が1件以上返ることに置き換える | wiki-query はこの検証が通らないと検索を使わない |
-| `tests/conftest.py` | 置き換えた実装を試す upstream のテストを、file 名か test id の完全一致で skip | 通るはずのない失敗が本物の回帰を隠すため |
+| `scripts/retrieve.py` `bm25-index.py` `contextual-prefix.py` `rerank.py`(各末尾の9行)・`claude_obsidian/youmu_bridge.py`・`tests/test_youmu_bridge.py` | upstream の実装はそのまま残し、`--vault`(または `YOUMU_VAULT`)が Youmu の vault(`.vault-meta/` と `scripts/<name>.py` がある)を指すときだけ、その vault の同名スクリプトへ引き渡す | 検索は Youmu の実装を使う(利用者の裁定)。upstream の検索スクリプトは Youmu の索引を読めない。**全部を置き換えると upstream の検索と test が壊れる**(2026-09-27、Linux で7件。要件 F24) |
+| `tests/test_wsl_route.py`・`tests/test_youmu_bridge.py` の末尾 | file を直接走らせたときに pytest で自分を実行する | upstream の `make test` は test file を直接走らせる。pytest の形の test は、この入口が無いと何も実行せずに通過する |
 | `YOUMU.md` | この文書 | — |
 
 vault 側の入口は `10-SYSTEM/scripts/co.sh`(製品ツリーを `<vault の親>/claude-obsidian-product` に置く前提)。
@@ -27,25 +26,20 @@ vault 側の入口は `10-SYSTEM/scripts/co.sh`(製品ツリーを `<vault の�
    git -C claude-obsidian-product merge vX.Y.Z
    ```
 2. 衝突を解く。衝突しうるのは上の表の既存 file だけ。
-   - 入口4本(`scripts/retrieve.py` ほか): **youmu 側を採る。**upstream が引数を変えていたら手順 4-f で確かめる。
+   - 入口4本(`scripts/retrieve.py` ほか): **upstream 側を採り、末尾の `if __name__ == "__main__":` の中に引き渡しの数行を戻す。**
+     upstream が引数を変えていたら手順 4-f で確かめる。
    - `scripts/claude-obsidian.py`: upstream 側を採り、`from claude_obsidian.cli import main` の直前に振り分けの4行を戻す。
-   - `config/capabilities.json`: upstream 側を採り、wiki-retrieve の `verification_command` だけ戻す。
 3. upstream が検索スクリプトを**新しく足していないか**を見る(`git diff vOLD vX.Y.Z --stat -- scripts/`)。
    足していて、それが Youmu の索引を読むなら、入口に置き換えるか判断する。
 4. 受け入れ(**全部**。1つでも落ちたら使わない)
    - a. `python -m pytest -q tests/test_youmu_bridge.py tests/test_wsl_route.py` が全件緑。
      `test_every_cli_subcommand_is_classified_as_routed_or_native` が落ちたら、upstream がサブコマンドを足している。
      vault に書くなら `ROUTED_GROUPS`、書かないなら `NATIVE_GROUPS` へ足す(`claude_obsidian/wsl_route.py`)。
-   - b. `tests/conftest.py` の一覧が古いと収集の段階で止まる。test id の改名なら追従する。**置き換えていない実装のテストは skip に足さない。**
-   - c. **失敗を基準と比べる。**素の tag を別に checkout し、同じテスト群を Windows で走らせて、
-     `FAILED` / `SUBFAILED` の一覧がこの branch と一致することを確かめる。一致しない行が今回の変更で壊したもの。
-     ```
-     git -C claude-obsidian-product worktree add --detach <一時ディレクトリ> vX.Y.Z
-     python -m pytest -q -p no:cacheprovider -rf --tb=no <テスト群>   # 両方の木で
-     git -C claude-obsidian-product worktree remove --force <一時ディレクトリ>
-     ```
-     2026-09-13(v2.2.0)時点で、両方に共通する失敗は `tests/test_vault_root_separation.py` の4件と
-     `tests/test_installed_tree_boundary.py` の11件(どちらも Windows の `bash` が WSL を指すことと、試験用 vault への書き込み拒否が原因)。
+   - b. **upstream の test を upstream の想定環境で、upstream と同じ走らせ方で比べる**(要件 F24)。
+     vault の `10-SYSTEM/scripts/run_upstream_tests_wsl.sh` が、WSL の home へこの branch と素の tag を clone し、
+     `make test` と同じ中身を1 file ずつ走らせて失敗の集合を出す。**この branch だけで落ちる行が今回の変更で壊したもの。**
+     Windows の pytest で比べない — 2026-09-13〜15 は pytest 用の skip 一覧が効いて、Linux で落ちる7件が隠れていた。
+     2026-09-27 時点で、両方で揺れるのは `tests/test_transaction.py`(同じ大きさの内容変更の検出。時刻の粒度)だけ。
    - d. `bash <vault>/10-SYSTEM/scripts/co.sh doctor` が ok、`co.sh contracts --verify --capability wiki-retrieve` が verified。
    - e. 全体の `co.sh contracts --verify` で degraded が増えていないか。v2.2.0 時点の degraded は wiki / wiki-cli / wiki-lint の3件で、
      **3件とも同じテストを WSL で走らせると通る**(ネイティブで落ちる原因は symlink の作成権限と、試験用 vault への書き込み拒否)。

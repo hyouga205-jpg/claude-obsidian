@@ -2,8 +2,9 @@
 
 なぜ要るか(2026-09-13 ユーザー裁定「検索系は案2」): upstream v2.2.0 の検索スクリプトは Youmu の索引を読めない
 (版番号と本文ハッシュの流儀が違う)。スキル wiki-query / wiki-retrieve は `$PRODUCT_ROOT/scripts/*.py --vault V ...`
-を呼ぶので、この4本を Youmu の vault にあるスクリプトへの中継に置き換える。
-wiki-query は wiki-retrieve の検証が通らないと検索を使わず全文検索へ落ちるので、検証コマンドも差し替える。
+を呼ぶ。この4本は upstream の実装を残したまま、`--vault`(または YOUMU_VAULT)が Youmu の vault を
+指すときだけ、その vault の同名スクリプトへ引き渡す(2026-09-27。全部を置き換えると upstream の test が
+Linux で7件落ちた。要件 F24)。検証コマンドは upstream のまま。
 """
 from __future__ import annotations
 
@@ -170,21 +171,21 @@ def test_help_with_a_vault_shows_the_youmu_script_help(tmp_path):
     assert calls == [["PY", str(vault.resolve() / "scripts" / "retrieve.py"), "-h"]]
 
 
-@pytest.mark.parametrize("script", [f"{name}.py" for name in NAMES] + ["youmu_retrieve_verify.py"])
+@pytest.mark.parametrize("script", [f"{name}.py" for name in NAMES])
 def test_help_entry_points_exit_zero_without_a_vault(tmp_path, script):
+    # Youmu の vault を名指ししない呼び出しは upstream の実装が答える。
     completed = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / script), "--help"],
         capture_output=True, text=True, timeout=120, cwd=str(tmp_path),
-        env={**os.environ, "YOUMU_VAULT": str(tmp_path / "no-vault")},
+        env={k: v for k, v in os.environ.items() if k != "YOUMU_VAULT"},
     )
     assert completed.returncode == 0, completed.stderr
-    assert "Youmu" in completed.stdout
 
 
-# --- 置き換えた4本の起動スクリプト ------------------------------------------------
+# --- 4本の起動スクリプト: Youmu の vault のときだけ引き渡す ------------------------
 
 @pytest.mark.parametrize("name", NAMES)
-def test_each_upstream_entry_point_now_hands_over_to_youmu(tmp_path, name):
+def test_each_entry_point_hands_over_when_the_vault_is_youmu(tmp_path, name):
     vault = make_vault(tmp_path)
     completed = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / f"{name}.py"), "--vault", str(vault), "arg1", "--flag"],
@@ -195,49 +196,76 @@ def test_each_upstream_entry_point_now_hands_over_to_youmu(tmp_path, name):
     assert recorded == ["arg1", "--flag"]
 
 
-# --- 検証コマンド -------------------------------------------------------------------
-
-def test_capability_verification_runs_the_youmu_verifier():
-    caps = json.loads((ROOT / "config" / "capabilities.json").read_text(encoding="utf-8"))
-    items = caps.get("capabilities", []) if isinstance(caps, dict) else caps
-    entries = [c for c in items if isinstance(c, dict) and c.get("id") == "wiki-retrieve"]
-    assert len(entries) == 1
-    assert entries[0]["verification_command"] == ["{python}", "scripts/youmu_retrieve_verify.py"]
-
-
-@pytest.mark.parametrize(
-    "case, expected_code",
-    [("healthy", 0), ("script-fails", 4), ("no-candidates", 1)],
-)
-def test_verifier_checks_the_bm25_path_that_wiki_query_uses(tmp_path, case, expected_code):
-    # 「失敗を期待する」ケースは、スクリプトが無くても非0になって素通りする。存在と具体的な値で確かめる。
-    verifier = ROOT / "scripts" / "youmu_retrieve_verify.py"
-    assert verifier.is_file()
+@pytest.mark.parametrize("name", NAMES)
+def test_each_entry_point_runs_upstream_for_any_other_vault(tmp_path, name):
+    # F24(2026-09-27 実測): 全部を置き換えると upstream の検索と test が壊れる。
+    # .vault-meta の無い vault は Youmu ではないので、同名の script があっても引き渡さない。
     vault = make_vault(tmp_path)
-    env = {**os.environ, "YOUMU_VAULT": str(vault)}
-    if case == "script-fails":
-        env["STUB_EXIT"] = "4"
-    if case == "no-candidates":
-        empty = "import json" + chr(10) + 'print(json.dumps({"candidates": []}))' + chr(10)
-        (vault / "scripts" / "retrieve.py").write_bytes(empty.encode("utf-8"))
+    for child in (vault / ".vault-meta",):
+        child.rmdir()
     completed = subprocess.run(
-        [sys.executable, str(verifier)],
-        capture_output=True, text=True, timeout=120, cwd=str(ROOT), env=env,
+        [sys.executable, str(ROOT / "scripts" / f"{name}.py"), "--vault", str(vault), "--help"],
+        capture_output=True, text=True, timeout=120, env={**os.environ, "STUB_EXIT": "5"},
     )
-    assert completed.returncode == expected_code, completed.stdout + completed.stderr
-    if expected_code == 0:
-        assert json.loads(completed.stdout)["ok"] is True
+    assert completed.returncode == 0, completed.stderr
+    assert not (vault / "scripts" / f"{name}.argv.json").exists()
 
 
-def test_verifier_does_not_stop_bm25_retrieval_when_only_rerank_is_down(tmp_path):
-    # 2026-09-13 実測: ollama が応答しないだけで recall_health.py は exit 3 を返した(索引は健全)。
-    # wiki-query は --no-rerank で BM25 だけを使う。それを理由に検証を落とすと、wiki-query は検索を使わず
-    # 全文検索へ落ちて想起が大きく悪化する。並べ替えの健全性は夜間の recall_health が見る。
-    verifier = ROOT / "scripts" / "youmu_retrieve_verify.py"
-    assert verifier.is_file()
-    vault = make_vault(tmp_path, health_exit=3)
-    completed = subprocess.run(
-        [sys.executable, str(verifier)],
-        capture_output=True, text=True, timeout=120, cwd=str(ROOT), env={**os.environ, "YOUMU_VAULT": str(vault)},
+def test_handover_declines_without_a_named_vault(tmp_path):
+    assert bridge.handover("retrieve", ["q"], product_root=tmp_path / "prod", environ={},
+                           runner=_must_not_run) is None
+
+
+def test_handover_declines_a_vault_without_the_script(tmp_path):
+    vault = make_vault(tmp_path)
+    (vault / "scripts" / "retrieve.py").unlink()
+    assert bridge.handover("retrieve", ["--vault", str(vault), "q"], product_root=tmp_path / "prod",
+                           environ={}, runner=_must_not_run) is None
+
+
+def test_handover_declines_a_vault_without_vault_meta(tmp_path):
+    vault = make_vault(tmp_path)
+    (vault / ".vault-meta").rmdir()
+    assert bridge.handover("retrieve", ["--vault", str(vault), "q"], product_root=tmp_path / "prod",
+                           environ={}, runner=_must_not_run) is None
+
+
+def test_handover_declines_the_product_tree_itself(tmp_path):
+    vault = make_vault(tmp_path)
+    assert bridge.handover("retrieve", ["q"], product_root=vault,
+                           environ={"YOUMU_VAULT": str(vault)}, runner=_must_not_run) is None
+
+
+def test_handover_uses_the_environment_vault_and_passes_the_exit_code(tmp_path):
+    vault = make_vault(tmp_path)
+    calls = []
+    code = bridge.handover(
+        "retrieve", ["q"], product_root=tmp_path / "prod", environ={"YOUMU_VAULT": str(vault)},
+        runner=lambda cmd, cwd=None: calls.append((cmd, cwd)) or subprocess.CompletedProcess(cmd, 7),
+        python="PY",
     )
-    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert code == 7
+    assert calls == [(["PY", str(vault.resolve() / "scripts" / "retrieve.py"), "q"], str(vault.resolve()))]
+
+
+def test_an_explicit_other_vault_wins_over_the_environment(tmp_path):
+    youmu = make_vault(tmp_path)
+    other = tmp_path / "plain vault"
+    other.mkdir()
+    assert bridge.handover("retrieve", ["--vault", str(other), "q"], product_root=tmp_path / "prod",
+                           environ={"YOUMU_VAULT": str(youmu)}, runner=_must_not_run) is None
+
+
+# --- 検証コマンドは upstream のまま ------------------------------------------------
+
+def test_capability_verification_is_upstreams():
+    # 以前は wiki-retrieve の検証を Youmu 用に差し替えていた。upstream の実装が残るので戻す。
+    caps = (ROOT / "config" / "capabilities.json").read_text(encoding="utf-8")
+    assert "youmu_retrieve_verify" not in caps
+    assert not (ROOT / "scripts" / "youmu_retrieve_verify.py").exists()
+
+
+if __name__ == "__main__":
+    # upstream の `make test` は test file を直接走らせる。pytest の形の test を
+    # 何も実行せずに通過させないため、ここで pytest に渡す(pytest が無ければ落ちる)。
+    raise SystemExit(pytest.main([__file__, "-q", "-p", "no:cacheprovider"]))

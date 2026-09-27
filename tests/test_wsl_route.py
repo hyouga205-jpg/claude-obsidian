@@ -13,7 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from claude_obsidian import wsl_route
+# upstream の `make test` はこの file を直接走らせるので、repo の根を import path に入れる。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from claude_obsidian import wsl_route  # noqa: E402
 
 BS = chr(92)
 ROOT = Path(__file__).resolve().parents[1]
@@ -170,3 +173,8 @@ def test_launcher_still_runs_read_only_commands_natively():
     )
     assert completed.returncode == 0
     assert "get" in completed.stdout and "set" in completed.stdout
+
+
+if __name__ == "__main__":
+    # pytest の形の test を何も実行せずに通過させないため、ここで pytest に渡す(pytest が無ければ落ちる)。
+    raise SystemExit(pytest.main([__file__, "-q", "-p", "no:cacheprovider"]))

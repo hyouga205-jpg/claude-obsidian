@@ -4,8 +4,14 @@ Why (user ruling 2026-09-13, "retrieval stays Youmu's"): upstream v2.2.0's
 retrieval scripts cannot read the Youmu index (a different schema version and a
 different page-body hash convention), while the wiki-query / wiki-retrieve
 skills call ``$PRODUCT_ROOT/scripts/<name>.py --vault VAULT ...``. On this
-branch those four entry points hand the call over to the same-named script in
-the Youmu vault.
+branch those four entry points keep the upstream implementation and, only when
+the call names a Youmu vault, hand it over to the same-named script in that
+vault (``handover``). Any other vault runs upstream's code, so upstream's
+retrieval and its tests stay intact (requirement F24, measured 2026-09-27: the
+earlier full replacement broke seven upstream tests on Linux).
+
+A Youmu vault is named by ``--vault`` or ``YOUMU_VAULT`` and has both
+``.vault-meta/`` and ``scripts/<name>.py``; it is never this product tree.
 
 The Youmu scripts find their vault from their own location and do not take
 ``--vault``, so the option is validated and removed. Youmu's ``rerank.py``
@@ -136,3 +142,30 @@ def run(
         )
     completed = runner([python, str(script), *rest], cwd=str(vault))
     return completed.returncode
+
+
+def handover(
+    name: str,
+    argv: Sequence[str],
+    *,
+    product_root: Path | str,
+    environ: Mapping[str, str] | None = None,
+    **kwargs,
+) -> int | None:
+    """Run the Youmu script when this call names a Youmu vault; else ``None``.
+
+    ``None`` means "not ours": the caller runs the upstream implementation, which
+    also reports its own errors for a missing or invalid ``--vault``.
+    """
+
+    environ = os.environ if environ is None else environ
+    vault_arg, _rest, _dropped = split_args(argv, name=name)
+    candidate = vault_arg or environ.get(VAULT_ENV)
+    if not candidate:
+        return None
+    vault = Path(candidate).resolve()
+    if vault == Path(product_root).resolve():
+        return None
+    if not (vault / ".vault-meta").is_dir() or not (vault / "scripts" / f"{name}.py").is_file():
+        return None
+    return run(name, argv, product_root=product_root, environ=environ, **kwargs)
