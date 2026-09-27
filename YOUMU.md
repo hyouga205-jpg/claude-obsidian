@@ -11,6 +11,7 @@
 | `scripts/claude-obsidian.py`(4行)・`claude_obsidian/wsl_route.py`・`tests/test_wsl_route.py` | vault に書くサブコマンドを、ネイティブ Windows では WSL の `python3` で実行する | upstream はネイティブ Windows での vault 書き込みを `UNSUPPORTED_PLATFORM` で拒否する |
 | `scripts/retrieve.py` `bm25-index.py` `contextual-prefix.py` `rerank.py`(各末尾の9行)・`claude_obsidian/youmu_bridge.py`・`tests/test_youmu_bridge.py` | upstream の実装はそのまま残し、`--vault`(または `YOUMU_VAULT`)が Youmu の vault(`.vault-meta/` と `scripts/<name>.py` がある)を指すときだけ、その vault の同名スクリプトへ引き渡す | 検索は Youmu の実装を使う(利用者の裁定)。upstream の検索スクリプトは Youmu の索引を読めない。**全部を置き換えると upstream の検索と test が壊れる**(2026-09-27、Linux で7件。要件 F24) |
 | `tests/test_wsl_route.py`・`tests/test_youmu_bridge.py` の末尾 | file を直接走らせたときに pytest で自分を実行する | upstream の `make test` は test file を直接走らせる。pytest の形の test は、この入口が無いと何も実行せずに通過する |
+| `tests/test_youmu_install_roundtrip.py` | 一時 dir の中で clone → `init`・`adopt`・`setup-multi-agent.sh --host opencode` → `doctor`・`lint` → per-skill link の削除を行い、既存の vault と HOME が1 byte も変わらないことを比べる | Youmu の要件 F25・F27・F28(配布の検査)。WSL が使えない環境では skip せず失敗する。file を直接走らせたときも pytest で自分を実行する |
 | `YOUMU.md` | この文書 | — |
 
 vault 側の入口は `10-SYSTEM/scripts/co.sh`(製品ツリーを `<vault の親>/claude-obsidian-product` に置く前提)。
