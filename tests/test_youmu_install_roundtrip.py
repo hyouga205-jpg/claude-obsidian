@@ -27,7 +27,6 @@ sys.path.insert(0, str(ROOT))
 from claude_obsidian.capture import DEFAULT_INBOX, LEGACY_RAW  # noqa: E402
 from claude_obsidian.ledgers import CLAIM_PATH, SOURCE_PATH  # noqa: E402
 
-BRANCH = "youmu-w9-roundtrip"
 GENERATED_AT = "2026-09-26T00:00:00Z"
 INIT_OPERATION_ID = "w9-init-reviewed"
 ADOPT_OPERATION_ID = "w9-adopt-reviewed"
@@ -340,8 +339,15 @@ def test_install_test_uninstall_roundtrip(tmp_path: Path) -> None:
     started = time.monotonic()
     wsl_steps: list[str] = []
     clone = tmp_path / "clean-checkout"
+    # branch 名ではなく、いま checkout している commit を clone する
+    # (merge 後や、受け入れ用の clone の中では作業 branch が存在しない)。
+    head = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False,
+    )
+    assert head.returncode == 0, f"cannot read HEAD: {head.stderr[-2000:]}"
     cloned = subprocess.run(
-        ["git", "clone", "--branch", BRANCH, str(ROOT), str(clone)],
+        ["git", "clone", "--no-checkout", str(ROOT), str(clone)],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -349,6 +355,11 @@ def test_install_test_uninstall_roundtrip(tmp_path: Path) -> None:
         check=False,
     )
     assert cloned.returncode == 0, f"clean checkout failed: {cloned.stderr[-2000:]}"
+    checked = subprocess.run(
+        ["git", "-C", str(clone), "checkout", "--detach", head.stdout.strip()],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180, check=False,
+    )
+    assert checked.returncode == 0, f"clean checkout failed: {checked.stderr[-2000:]}"
 
     existing_vault = tmp_path / "existing-vault"
     existing_vault.mkdir()
@@ -411,3 +422,9 @@ def test_install_test_uninstall_roundtrip(tmp_path: Path) -> None:
             ensure_ascii=False,
         )
     )
+
+
+if __name__ == "__main__":
+    # upstream の `make test` は test file を直接走らせる。pytest の形の test を
+    # 何も実行せずに通過させないため、ここで pytest に渡す(pytest が無ければ落ちる)。
+    raise SystemExit(pytest.main([__file__, "-q", "-p", "no:cacheprovider"]))
